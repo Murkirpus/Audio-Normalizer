@@ -1,261 +1,535 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Audio Normalizer - Профессиональная нормализация громкости аудио и видео
+Версия: 2.0 - Красивый интерфейс
+"""
+
 import tkinter as tk
-from tkinter import filedialog, ttk, messagebox
+from tkinter import filedialog, ttk, messagebox, font
 import os
 from pathlib import Path
 import subprocess
 import threading
-import json
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 
 class AudioNormalizer:
     def __init__(self, root):
         self.root = root
-        self.root.title("Нормализация громкости аудио")
-        self.root.geometry("800x620")
-        
+        self.root.title("🎵 Audio Normalizer Pro")
+        self.root.geometry("950x680")
         self.root.resizable(True, True)
+        
+        # Цветовая схема
+        self.colors = {
+            'bg': '#1e1e2e',           # Темный фон
+            'bg_light': '#2a2a3e',     # Светлее фон
+            'accent': '#89b4fa',       # Голубой акцент
+            'success': '#a6e3a1',      # Зеленый
+            'warning': '#f9e2af',      # Желтый
+            'error': '#f38ba8',        # Красный
+            'text': '#cdd6f4',         # Светлый текст
+            'text_dim': '#9399b2',     # Тусклый текст
+            'border': '#45475a',       # Граница
+        }
+        
+        self.root.configure(bg=self.colors['bg'])
         
         self.files = []
         self.processing = False
         self.completed = 0
         self.total = 0
         
+        self.setup_fonts()
+        self.setup_styles()
         self.setup_ui()
     
+    def setup_fonts(self):
+        """Настройка шрифтов"""
+        self.fonts = {
+            'title': font.Font(family='Segoe UI', size=14, weight='bold'),
+            'subtitle': font.Font(family='Segoe UI', size=11, weight='bold'),
+            'normal': font.Font(family='Segoe UI', size=10),
+            'small': font.Font(family='Segoe UI', size=9),
+        }
+    
+    def setup_styles(self):
+        """Настройка стилей ttk"""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Стиль для LabelFrame
+        style.configure('Custom.TLabelframe', 
+                       background=self.colors['bg_light'],
+                       bordercolor=self.colors['border'],
+                       borderwidth=2)
+        style.configure('Custom.TLabelframe.Label', 
+                       background=self.colors['bg_light'],
+                       foreground=self.colors['accent'],
+                       font=self.fonts['subtitle'])
+        
+        # Стиль для Checkbutton
+        style.configure('Custom.TCheckbutton',
+                       background=self.colors['bg_light'],
+                       foreground=self.colors['text'],
+                       font=self.fonts['normal'])
+        
+        # Стиль для Radiobutton
+        style.configure('Custom.TRadiobutton',
+                       background=self.colors['bg_light'],
+                       foreground=self.colors['text'],
+                       font=self.fonts['normal'])
+        
+        # Стиль для Progressbar
+        style.configure('Custom.Horizontal.TProgressbar',
+                       background=self.colors['accent'],
+                       troughcolor=self.colors['bg_light'],
+                       bordercolor=self.colors['border'],
+                       lightcolor=self.colors['accent'],
+                       darkcolor=self.colors['accent'])
+    
+    def create_button(self, parent, text, command, bg_color=None, width=15):
+        """Создание красивой кнопки"""
+        if bg_color is None:
+            bg_color = self.colors['accent']
+        
+        btn = tk.Button(parent, text=text, command=command,
+                       bg=bg_color, fg='#000000',
+                       font=self.fonts['normal'],
+                       relief=tk.FLAT, width=width,
+                       cursor='hand2', borderwidth=0,
+                       pady=5)
+        
+        # Hover эффекты
+        def on_enter(e):
+            btn['bg'] = self.lighten_color(bg_color)
+        
+        def on_leave(e):
+            btn['bg'] = bg_color
+        
+        btn.bind('<Enter>', on_enter)
+        btn.bind('<Leave>', on_leave)
+        
+        return btn
+    
+    def lighten_color(self, hex_color, factor=1.2):
+        """Осветлить цвет"""
+        hex_color = hex_color.lstrip('#')
+        rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        rgb = tuple(min(255, int(c * factor)) for c in rgb)
+        return '#{:02x}{:02x}{:02x}'.format(*rgb)
+    
     def setup_ui(self):
-        # Фрейм для кнопок выбора файлов
-        btn_frame = tk.Frame(self.root, pady=3)
-        btn_frame.pack(fill=tk.X)
+        """Создание интерфейса"""
         
-        tk.Button(btn_frame, text="Добавить файлы", 
-                 command=self.add_files, width=15).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Добавить папку", 
-                 command=self.add_folder, width=15).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Очистить список", 
-                 command=self.clear_files, width=15).pack(side=tk.LEFT, padx=5)
+        # === ЗАГОЛОВОК ===
+        header_frame = tk.Frame(self.root, bg=self.colors['bg_light'], height=60)
+        header_frame.pack(fill=tk.X, pady=(0, 5))
+        header_frame.pack_propagate(False)
         
-        # Список файлов
-        list_frame = tk.Frame(self.root)
-        list_frame.pack(fill=tk.BOTH, expand=False, padx=10, pady=3)
+        title_label = tk.Label(header_frame, text="🎵 Audio Normalizer Pro",
+                              bg=self.colors['bg_light'],
+                              fg=self.colors['accent'],
+                              font=self.fonts['title'])
+        title_label.pack(pady=(10, 2))
         
-        tk.Label(list_frame, text="Файлы для обработки:", font=('Arial', 8)).pack(anchor=tk.W)
+        subtitle_label = tk.Label(header_frame, 
+                                 text="Профессиональная нормализация громкости",
+                                 bg=self.colors['bg_light'],
+                                 fg=self.colors['text_dim'],
+                                 font=self.fonts['small'])
+        subtitle_label.pack()
         
-        scrollbar = tk.Scrollbar(list_frame)
+        # === КНОПКИ ДЕЙСТВИЙ ===
+        btn_frame = tk.Frame(self.root, bg=self.colors['bg'], pady=5)
+        btn_frame.pack(fill=tk.X, padx=10)
+        
+        self.create_button(btn_frame, "📁 Добавить файлы", 
+                          self.add_files, self.colors['accent'], 18).pack(side=tk.LEFT, padx=5)
+        self.create_button(btn_frame, "📂 Добавить папку", 
+                          self.add_folder, self.colors['accent'], 18).pack(side=tk.LEFT, padx=5)
+        self.create_button(btn_frame, "🗑️ Очистить", 
+                          self.clear_files, self.colors['error'], 15).pack(side=tk.LEFT, padx=5)
+        
+        # === СПИСОК ФАЙЛОВ ===
+        list_frame = tk.LabelFrame(self.root, text="  Файлы для обработки  ",
+                                  bg=self.colors['bg_light'],
+                                  fg=self.colors['accent'],
+                                  font=self.fonts['subtitle'],
+                                  relief=tk.FLAT, borderwidth=2,
+                                  highlightbackground=self.colors['border'],
+                                  highlightthickness=1)
+        list_frame.pack(fill=tk.BOTH, expand=False, padx=10, pady=(5, 5))
+        
+        # Scrollbar и Listbox
+        list_inner = tk.Frame(list_frame, bg=self.colors['bg_light'])
+        list_inner.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        scrollbar = tk.Scrollbar(list_inner, bg=self.colors['bg_light'])
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.file_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, height=4, font=('Arial', 8))
-        self.file_listbox.pack(fill=tk.BOTH, expand=False)
+        self.file_listbox = tk.Listbox(list_inner, yscrollcommand=scrollbar.set,
+                                       bg=self.colors['bg'], fg=self.colors['text'],
+                                       font=self.fonts['normal'], selectbackground=self.colors['accent'],
+                                       selectforeground='#000000', borderwidth=0,
+                                       highlightthickness=0, relief=tk.FLAT, height=6)
+        self.file_listbox.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
         scrollbar.config(command=self.file_listbox.yview)
         
-        # Настройки - ДВЕ КОЛОНКИ
-        settings_main = tk.LabelFrame(self.root, text="Настройки", pady=5, font=('Arial', 8))
-        settings_main.pack(fill=tk.BOTH, expand=True, padx=10, pady=3)
+        # === НАСТРОЙКИ (2 КОЛОНКИ) С ПРОКРУТКОЙ ===
+        # Создаем Canvas с прокруткой для настроек
+        settings_outer = tk.Frame(self.root, bg=self.colors['bg'])
+        settings_outer.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        # Создаем две колонки
-        left_column = tk.Frame(settings_main)
-        left_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        # Canvas для прокрутки
+        canvas = tk.Canvas(settings_outer, bg=self.colors['bg'], 
+                          highlightthickness=0, borderwidth=0)
+        scrollbar_settings = tk.Scrollbar(settings_outer, orient="vertical", 
+                                         command=canvas.yview, bg=self.colors['bg'])
         
-        right_column = tk.Frame(settings_main)
-        right_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        settings_scrollable = tk.Frame(canvas, bg=self.colors['bg'])
+        
+        settings_scrollable.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=settings_scrollable, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar_settings.set)
+        
+        # Прокрутка мышью
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar_settings.pack(side="right", fill="y")
+        
+        settings_container = settings_scrollable
         
         # ЛЕВАЯ КОЛОНКА
-        # Режим обработки
-        tk.Label(left_column, text="Режим:", font=('Arial', 8, 'bold')).pack(anchor=tk.W, pady=(0,2))
+        left_column = tk.Frame(settings_container, bg=self.colors['bg'])
+        left_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         
-        self.mode_var = tk.StringVar(value="normal")
-        tk.Radiobutton(left_column, text="Обычный", variable=self.mode_var, value="normal", font=('Arial', 8)).pack(anchor=tk.W, padx=8, pady=0)
-        tk.Radiobutton(left_column, text="Опера/классика", variable=self.mode_var, value="compressed", font=('Arial', 8)).pack(anchor=tk.W, padx=8, pady=0)
-        tk.Radiobutton(left_column, text="Вокальный", variable=self.mode_var, value="vocal", font=('Arial', 8)).pack(anchor=tk.W, padx=8, pady=0)
-        
-        # Защита от перегрузов + ВЧ шум - В ОДНУ СТРОКУ
-        opts_frame = tk.Frame(left_column)
-        opts_frame.pack(fill=tk.X, pady=2)
-        
-        self.prevent_clipping_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(opts_frame, text="🛡️ Защита", 
-                      variable=self.prevent_clipping_var, font=('Arial', 7), fg='red').pack(side=tk.LEFT, padx=2)
-        
-        self.hf_denoise_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(opts_frame, text="🔇 Шум ВЧ", 
-                      variable=self.hf_denoise_var, font=('Arial', 7), fg='purple').pack(side=tk.LEFT, padx=2)
-        
-        self.exciter_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(opts_frame, text="✨ Яркость", 
-                      variable=self.exciter_var, font=('Arial', 7), fg='blue').pack(side=tk.LEFT, padx=2)
-        
-        # EQ - КОМПАКТНО
-        tk.Label(left_column, text="EQ (dB):", font=('Arial', 8, 'bold')).pack(anchor=tk.W, pady=(3,1))
-        
-        eq_frame = tk.Frame(left_column)
-        eq_frame.pack(fill=tk.X, padx=8, pady=1)
-        
-        # Низ, Сред, Верх в одну строку
-        eq_bass_frame = tk.Frame(eq_frame)
-        eq_bass_frame.pack(fill=tk.X)
-        tk.Label(eq_bass_frame, text="Низ:", font=('Arial', 7), width=5, anchor='w').pack(side=tk.LEFT)
-        self.eq_bass_var = tk.StringVar(value="0")
-        tk.Entry(eq_bass_frame, textvariable=self.eq_bass_var, width=5, font=('Arial', 7)).pack(side=tk.LEFT, padx=2)
-        
-        tk.Label(eq_bass_frame, text="Сред:", font=('Arial', 7), width=5, anchor='w').pack(side=tk.LEFT, padx=(5,0))
-        self.eq_mid_var = tk.StringVar(value="0")
-        tk.Entry(eq_bass_frame, textvariable=self.eq_mid_var, width=5, font=('Arial', 7)).pack(side=tk.LEFT, padx=2)
-        
-        tk.Label(eq_bass_frame, text="Верх:", font=('Arial', 7), width=5, anchor='w').pack(side=tk.LEFT, padx=(5,0))
-        self.eq_treble_var = tk.StringVar(value="0")
-        tk.Entry(eq_bass_frame, textvariable=self.eq_treble_var, width=5, font=('Arial', 7)).pack(side=tk.LEFT, padx=2)
-        
-        # Стерео
-        tk.Label(left_column, text="Стерео:", font=('Arial', 8, 'bold')).pack(anchor=tk.W, pady=(3,1))
-        
-        stereo_frame = tk.Frame(left_column)
-        stereo_frame.pack(fill=tk.X, padx=8)
-        
-        self.stereo_width_var = tk.StringVar(value="1.0")
-        tk.Entry(stereo_frame, textvariable=self.stereo_width_var, width=5, font=('Arial', 7)).pack(side=tk.LEFT, padx=2)
-        
-        tk.Button(stereo_frame, text="1.0", command=lambda: self.stereo_width_var.set("1.0"), width=3, font=('Arial', 7)).pack(side=tk.LEFT, padx=1)
-        tk.Button(stereo_frame, text="0.7", command=lambda: self.stereo_width_var.set("0.7"), width=3, font=('Arial', 7)).pack(side=tk.LEFT, padx=1)
-        tk.Button(stereo_frame, text="0.5", command=lambda: self.stereo_width_var.set("0.5"), width=3, font=('Arial', 7)).pack(side=tk.LEFT, padx=1)
-        
-        # ПРАВАЯ КОЛОНКА
-        # Целевой уровень
-        tk.Label(right_column, text="Целевой уровень (dB):", font=('Arial', 8, 'bold')).pack(anchor=tk.W)
-        
-        target_frame = tk.Frame(right_column)
-        target_frame.pack(fill=tk.X, pady=2, padx=8)
-        self.target_level_var = tk.StringVar(value="-16")
-        tk.Entry(target_frame, textvariable=self.target_level_var, width=8, font=('Arial', 8)).pack(side=tk.LEFT, padx=2)
-        tk.Label(target_frame, text="(-16 муз, -18 опера)", font=('Arial', 7), fg='gray').pack(side=tk.LEFT)
-        
-        # Шумоподавление
-        tk.Label(right_column, text="Шумоподавление:", font=('Arial', 8, 'bold')).pack(anchor=tk.W, pady=(3,1))
-        
-        self.use_gate_var = tk.BooleanVar(value=False)
-        
-        gate_frame = tk.Frame(right_column)
-        gate_frame.pack(fill=tk.X, padx=8)
-        
-        tk.Checkbutton(gate_frame, text="Вкл", variable=self.use_gate_var, font=('Arial', 7)).pack(side=tk.LEFT)
-        tk.Label(gate_frame, text="Порог:", font=('Arial', 7)).pack(side=tk.LEFT, padx=(5,2))
-        self.gate_threshold_var = tk.StringVar(value="-50")
-        tk.Entry(gate_frame, textvariable=self.gate_threshold_var, width=6, font=('Arial', 7)).pack(side=tk.LEFT, padx=2)
-        tk.Label(gate_frame, text="dB", font=('Arial', 7)).pack(side=tk.LEFT)
-        
-        # MP4
-        tk.Label(right_column, text="MP4:", font=('Arial', 8, 'bold')).pack(anchor=tk.W, pady=(3,1))
-        
-        mp4_frame = tk.Frame(right_column)
-        mp4_frame.pack(fill=tk.X, padx=8)
-        
-        self.mp4_output_var = tk.StringVar(value="mp3")
-        tk.Radiobutton(mp4_frame, text="→MP3", variable=self.mp4_output_var, value="mp3", font=('Arial', 7)).pack(side=tk.LEFT, padx=2)
-        tk.Radiobutton(mp4_frame, text="→MP4", variable=self.mp4_output_var, value="mp4", font=('Arial', 7)).pack(side=tk.LEFT, padx=2)
-        
-        # Потоки
-        tk.Label(right_column, text="Потоки:", font=('Arial', 8, 'bold')).pack(anchor=tk.W, pady=(3,1))
-        
-        threads_frame = tk.Frame(right_column)
-        threads_frame.pack(fill=tk.X, padx=8)
-        
-        cpu_count = multiprocessing.cpu_count()
-        self.threads_var = tk.StringVar(value=str(cpu_count))
-        tk.Entry(threads_frame, textvariable=self.threads_var, width=6, font=('Arial', 7)).pack(side=tk.LEFT, padx=2)
-        tk.Label(threads_frame, text=f"(ядер: {cpu_count})", font=('Arial', 7), fg='gray').pack(side=tk.LEFT)
-        
-        # Суффикс
-        tk.Label(right_column, text="Суффикс:", font=('Arial', 8, 'bold')).pack(anchor=tk.W, pady=(3,1))
-        
-        suffix_frame = tk.Frame(right_column)
-        suffix_frame.pack(fill=tk.X, padx=8)
-        self.suffix_var = tk.StringVar(value="_normalized")
-        tk.Entry(suffix_frame, textvariable=self.suffix_var, width=18, font=('Arial', 7)).pack(side=tk.LEFT)
+        # Основные настройки
+        main_settings = ttk.LabelFrame(left_column, text="  Основные настройки  ", 
+                                       style='Custom.TLabelframe')
+        main_settings.pack(fill=tk.X, pady=5)
         
         # Выходная папка
-        output_main = tk.Frame(self.root)
-        output_main.pack(fill=tk.X, padx=10, pady=3)
+        output_frame = tk.Frame(main_settings, bg=self.colors['bg_light'])
+        output_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        tk.Label(output_main, text="Папка:", font=('Arial', 8, 'bold')).pack(anchor=tk.W)
+        tk.Label(output_frame, text="📁 Выходная папка:",
+                bg=self.colors['bg_light'], fg=self.colors['text'],
+                font=self.fonts['normal']).pack(side=tk.LEFT)
         
-        output_entry_frame = tk.Frame(output_main)
-        output_entry_frame.pack(fill=tk.X, pady=2)
+        self.output_var = tk.StringVar(value="Не выбрана")
+        tk.Label(output_frame, textvariable=self.output_var,
+                bg=self.colors['bg_light'], fg=self.colors['text_dim'],
+                font=self.fonts['small']).pack(side=tk.LEFT, padx=10)
         
-        self.output_var = tk.StringVar(value="")
-        tk.Entry(output_entry_frame, textvariable=self.output_var, font=('Arial', 8)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        tk.Button(output_entry_frame, text="Выбрать", command=self.select_output_folder, width=8, font=('Arial', 8)).pack(side=tk.LEFT)
+        self.create_button(output_frame, "Выбрать", self.select_output_folder,
+                          self.colors['accent'], 10).pack(side=tk.RIGHT)
         
-        # Прогресс-бар
-        progress_frame = tk.Frame(self.root)
-        progress_frame.pack(fill=tk.X, padx=10, pady=3)
+        # Целевой уровень
+        target_frame = tk.Frame(main_settings, bg=self.colors['bg_light'])
+        target_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        self.progress = ttk.Progressbar(progress_frame, mode='determinate')
-        self.progress.pack(fill=tk.X)
+        tk.Label(target_frame, text="🎚️ Целевой уровень (LUFS):",
+                bg=self.colors['bg_light'], fg=self.colors['text'],
+                font=self.fonts['normal']).pack(side=tk.LEFT)
         
-        self.status_label = tk.Label(progress_frame, text="Готов к работе", font=('Arial', 8))
-        self.status_label.pack()
+        self.target_var = tk.StringVar(value="-16")
+        target_entry = tk.Entry(target_frame, textvariable=self.target_var,
+                               bg=self.colors['bg'], fg=self.colors['text'],
+                               font=self.fonts['normal'], width=8,
+                               relief=tk.FLAT, borderwidth=2,
+                               highlightbackground=self.colors['border'],
+                               highlightthickness=1)
+        target_entry.pack(side=tk.LEFT, padx=10)
         
-        # Кнопка обработки
-        self.process_btn = tk.Button(self.root, text="НОРМАЛИЗОВАТЬ ФАЙЛЫ", 
-                                     command=self.process_files, 
-                                     bg='green', fg='white', height=2, font=('Arial', 10, 'bold'))
-        self.process_btn.pack(fill=tk.X, padx=10, pady=5)
+        tk.Label(target_frame, text="dB  (рекомендуется: -16 для музыки, -14 для YouTube)",
+                bg=self.colors['bg_light'], fg=self.colors['text_dim'],
+                font=self.fonts['small']).pack(side=tk.LEFT)
+        
+        # Суффикс
+        suffix_frame = tk.Frame(main_settings, bg=self.colors['bg_light'])
+        suffix_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        tk.Label(suffix_frame, text="✏️ Суффикс файла:",
+                bg=self.colors['bg_light'], fg=self.colors['text'],
+                font=self.fonts['normal']).pack(side=tk.LEFT)
+        
+        self.suffix_var = tk.StringVar(value="_normalized")
+        suffix_entry = tk.Entry(suffix_frame, textvariable=self.suffix_var,
+                               bg=self.colors['bg'], fg=self.colors['text'],
+                               font=self.fonts['normal'], width=15,
+                               relief=tk.FLAT, borderwidth=2,
+                               highlightbackground=self.colors['border'],
+                               highlightthickness=1)
+        suffix_entry.pack(side=tk.LEFT, padx=10)
+        
+        # Режим обработки
+        mode_frame = ttk.LabelFrame(left_column, text="  🎛️ Режим обработки  ",
+                                   style='Custom.TLabelframe')
+        mode_frame.pack(fill=tk.X, pady=5)
+        
+        mode_inner = tk.Frame(mode_frame, bg=self.colors['bg_light'])
+        mode_inner.pack(fill=tk.X, padx=10, pady=5)
+        
+        self.mode_var = tk.StringVar(value="normal")
+        
+        modes = [
+            ("Normal (универсальный)", "normal"),
+            ("Music (музыка)", "music"),
+            ("Vocal (вокал, подкасты)", "vocal"),
+            ("Classic/Opera (классика)", "compressed")
+        ]
+        
+        for text, value in modes:
+            ttk.Radiobutton(mode_inner, text=text, variable=self.mode_var,
+                           value=value, style='Custom.TRadiobutton').pack(anchor=tk.W, pady=1)
+        
+        # ПРАВАЯ КОЛОНКА
+        right_column = tk.Frame(settings_container, bg=self.colors['bg'])
+        right_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        
+        # Дополнительные настройки
+        extra_settings = ttk.LabelFrame(right_column, text="  ⚙️ Дополнительно  ",
+                                       style='Custom.TLabelframe')
+        extra_settings.pack(fill=tk.X, pady=5)
+        
+        extra_inner = tk.Frame(extra_settings, bg=self.colors['bg_light'])
+        extra_inner.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Чекбоксы
+        self.keep_video_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(extra_inner, text="💾 Сохранить видео в MP4",
+                       variable=self.keep_video_var,
+                       style='Custom.TCheckbutton').pack(anchor=tk.W, pady=2)
+        
+        self.prevent_clipping_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(extra_inner, text="🛡️ Предотвращение клиппинга",
+                       variable=self.prevent_clipping_var,
+                       style='Custom.TCheckbutton').pack(anchor=tk.W, pady=2)
+        
+        self.use_gate_var = tk.BooleanVar(value=False)
+        gate_cb = ttk.Checkbutton(extra_inner, text="🔇 Noise Gate (шумоподавление)",
+                                 variable=self.use_gate_var,
+                                 style='Custom.TCheckbutton')
+        gate_cb.pack(anchor=tk.W, pady=2)
+        
+        # Gate порог
+        gate_threshold_frame = tk.Frame(extra_inner, bg=self.colors['bg_light'])
+        gate_threshold_frame.pack(fill=tk.X, padx=20, pady=2)
+        
+        tk.Label(gate_threshold_frame, text="Порог:",
+                bg=self.colors['bg_light'], fg=self.colors['text_dim'],
+                font=self.fonts['small']).pack(side=tk.LEFT)
+        
+        self.gate_threshold_var = tk.StringVar(value="-40")
+        gate_entry = tk.Entry(gate_threshold_frame, textvariable=self.gate_threshold_var,
+                             bg=self.colors['bg'], fg=self.colors['text'],
+                             font=self.fonts['small'], width=6,
+                             relief=tk.FLAT, borderwidth=1)
+        gate_entry.pack(side=tk.LEFT, padx=5)
+        
+        tk.Label(gate_threshold_frame, text="dB",
+                bg=self.colors['bg_light'], fg=self.colors['text_dim'],
+                font=self.fonts['small']).pack(side=tk.LEFT)
+        
+        self.use_exciter_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(extra_inner, text="✨ Harmonic Exciter (яркость)",
+                       variable=self.use_exciter_var,
+                       style='Custom.TCheckbutton').pack(anchor=tk.W, pady=2)
+        
+        self.hf_denoise_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(extra_inner, text="🎛️ HF Denoiser (старые записи)",
+                       variable=self.hf_denoise_var,
+                       style='Custom.TCheckbutton').pack(anchor=tk.W, pady=2)
+        
+        # Стерео-расширение
+        stereo_frame = tk.Frame(extra_inner, bg=self.colors['bg_light'])
+        stereo_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(stereo_frame, text="🎧 Стерeo-расширение:",
+                bg=self.colors['bg_light'], fg=self.colors['text'],
+                font=self.fonts['normal']).pack(side=tk.LEFT)
+        
+        self.stereo_var = tk.StringVar(value="1.0")
+        stereo_entry = tk.Entry(stereo_frame, textvariable=self.stereo_var,
+                               bg=self.colors['bg'], fg=self.colors['text'],
+                               font=self.fonts['normal'], width=6,
+                               relief=tk.FLAT, borderwidth=1)
+        stereo_entry.pack(side=tk.LEFT, padx=10)
+        
+        tk.Label(stereo_frame, text="(1.0=норма, 1.5=широко)",
+                bg=self.colors['bg_light'], fg=self.colors['text_dim'],
+                font=self.fonts['small']).pack(side=tk.LEFT)
+        
+        # Эквалайзер
+        eq_settings = ttk.LabelFrame(right_column, text="  🎚️ Эквалайзер (±12 dB)  ",
+                                     style='Custom.TLabelframe')
+        eq_settings.pack(fill=tk.X, pady=5)
+        
+        eq_inner = tk.Frame(eq_settings, bg=self.colors['bg_light'])
+        eq_inner.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Bass
+        bass_frame = tk.Frame(eq_inner, bg=self.colors['bg_light'])
+        bass_frame.pack(fill=tk.X, pady=2)
+        
+        tk.Label(bass_frame, text="🔊 Bass (40 Hz):",
+                bg=self.colors['bg_light'], fg=self.colors['text'],
+                font=self.fonts['normal'], width=15, anchor=tk.W).pack(side=tk.LEFT)
+        
+        self.eq_bass_var = tk.StringVar(value="0")
+        tk.Entry(bass_frame, textvariable=self.eq_bass_var,
+                bg=self.colors['bg'], fg=self.colors['text'],
+                font=self.fonts['normal'], width=6,
+                relief=tk.FLAT, borderwidth=1).pack(side=tk.LEFT, padx=5)
+        
+        tk.Label(bass_frame, text="dB",
+                bg=self.colors['bg_light'], fg=self.colors['text_dim'],
+                font=self.fonts['small']).pack(side=tk.LEFT)
+        
+        # Mid
+        mid_frame = tk.Frame(eq_inner, bg=self.colors['bg_light'])
+        mid_frame.pack(fill=tk.X, pady=2)
+        
+        tk.Label(mid_frame, text="🎙️ Mid (1000 Hz):",
+                bg=self.colors['bg_light'], fg=self.colors['text'],
+                font=self.fonts['normal'], width=15, anchor=tk.W).pack(side=tk.LEFT)
+        
+        self.eq_mid_var = tk.StringVar(value="0")
+        tk.Entry(mid_frame, textvariable=self.eq_mid_var,
+                bg=self.colors['bg'], fg=self.colors['text'],
+                font=self.fonts['normal'], width=6,
+                relief=tk.FLAT, borderwidth=1).pack(side=tk.LEFT, padx=5)
+        
+        tk.Label(mid_frame, text="dB",
+                bg=self.colors['bg_light'], fg=self.colors['text_dim'],
+                font=self.fonts['small']).pack(side=tk.LEFT)
+        
+        # Treble
+        treble_frame = tk.Frame(eq_inner, bg=self.colors['bg_light'])
+        treble_frame.pack(fill=tk.X, pady=2)
+        
+        tk.Label(treble_frame, text="🔔 Treble (10 kHz):",
+                bg=self.colors['bg_light'], fg=self.colors['text'],
+                font=self.fonts['normal'], width=15, anchor=tk.W).pack(side=tk.LEFT)
+        
+        self.eq_treble_var = tk.StringVar(value="0")
+        tk.Entry(treble_frame, textvariable=self.eq_treble_var,
+                bg=self.colors['bg'], fg=self.colors['text'],
+                font=self.fonts['normal'], width=6,
+                relief=tk.FLAT, borderwidth=1).pack(side=tk.LEFT, padx=5)
+        
+        tk.Label(treble_frame, text="dB",
+                bg=self.colors['bg_light'], fg=self.colors['text_dim'],
+                font=self.fonts['small']).pack(side=tk.LEFT)
+        
+        # Количество потоков
+        threads_frame = tk.Frame(eq_inner, bg=self.colors['bg_light'])
+        threads_frame.pack(fill=tk.X, pady=3)
+        
+        tk.Label(threads_frame, text="⚡ Потоков:",
+                bg=self.colors['bg_light'], fg=self.colors['text'],
+                font=self.fonts['normal'], width=15, anchor=tk.W).pack(side=tk.LEFT)
+        
+        max_threads = max(1, multiprocessing.cpu_count() - 1)
+        self.threads_var = tk.StringVar(value=str(max_threads))
+        tk.Entry(threads_frame, textvariable=self.threads_var,
+                bg=self.colors['bg'], fg=self.colors['text'],
+                font=self.fonts['normal'], width=6,
+                relief=tk.FLAT, borderwidth=1).pack(side=tk.LEFT, padx=5)
+        
+        tk.Label(threads_frame, text=f"(макс: {multiprocessing.cpu_count()})",
+                bg=self.colors['bg_light'], fg=self.colors['text_dim'],
+                font=self.fonts['small']).pack(side=tk.LEFT)
+        
+        # === ПРОГРЕСС И КНОПКА ===
+        bottom_frame = tk.Frame(self.root, bg=self.colors['bg'], pady=5)
+        bottom_frame.pack(fill=tk.X, padx=10, side=tk.BOTTOM)
+        
+        # Прогресс бар
+        progress_container = tk.Frame(bottom_frame, bg=self.colors['bg'])
+        progress_container.pack(fill=tk.X, pady=(0, 5))
+        
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(progress_container, variable=self.progress_var,
+                                           maximum=100, style='Custom.Horizontal.TProgressbar',
+                                           length=400)
+        self.progress_bar.pack(fill=tk.X)
+        
+        # Статус
+        self.status_var = tk.StringVar(value="Готов к работе")
+        self.status_label = tk.Label(bottom_frame, textvariable=self.status_var,
+                                     bg=self.colors['bg'], fg=self.colors['text'],
+                                     font=self.fonts['normal'])
+        self.status_label.pack(pady=3)
+        
+        # Кнопка запуска
+        self.start_button = self.create_button(bottom_frame, "▶️ Нормализовать файлы",
+                                               self.start_normalization,
+                                               self.colors['success'], 30)
+        self.start_button.pack(pady=3)
     
     def add_files(self):
-        files = filedialog.askopenfilenames(
-            title="Выберите аудио/видео файлы",
-            filetypes=[
-                ("Все поддерживаемые", "*.mp3 *.wav *.flac *.ogg *.m4a *.aac *.mp4 *.avi *.mkv *.mov"),
-                ("Аудио файлы", "*.mp3 *.wav *.flac *.ogg *.m4a *.aac"),
-                ("Видео файлы", "*.mp4 *.avi *.mkv *.mov"),
-                ("Все файлы", "*.*")
-            ]
+        """Добавить файлы"""
+        filetypes = (
+            ("Аудио/Видео", "*.mp3 *.mp4 *.wav *.flac *.aac *.ogg *.m4a *.wma *.avi *.mkv *.mov"),
+            ("Все файлы", "*.*")
         )
+        
+        files = filedialog.askopenfilenames(title="Выберите файлы", filetypes=filetypes)
+        
         for file in files:
             if file not in self.files:
                 self.files.append(file)
-                self.file_listbox.insert(tk.END, os.path.basename(file))
+                self.file_listbox.insert(tk.END, Path(file).name)
     
     def add_folder(self):
-        folder = filedialog.askdirectory(title="Выберите папку с аудио/видео файлами")
-        if folder:
-            audio_video_extensions = {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.mp4', '.avi', '.mkv', '.mov'}
-            for file_path in Path(folder).rglob('*'):
-                if file_path.suffix.lower() in audio_video_extensions:
-                    file_str = str(file_path)
-                    if file_str not in self.files:
-                        self.files.append(file_str)
-                        self.file_listbox.insert(tk.END, file_path.name)
+        """Добавить все файлы из папки"""
+        folder = filedialog.askdirectory(title="Выберите папку")
+        if not folder:
+            return
+        
+        extensions = ['.mp3', '.mp4', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.wma', '.avi', '.mkv', '.mov']
+        
+        for root, dirs, files in os.walk(folder):
+            for file in files:
+                if Path(file).suffix.lower() in extensions:
+                    full_path = os.path.join(root, file)
+                    if full_path not in self.files:
+                        self.files.append(full_path)
+                        self.file_listbox.insert(tk.END, file)
     
     def clear_files(self):
-        self.files = []
+        """Очистить список"""
+        self.files.clear()
         self.file_listbox.delete(0, tk.END)
     
     def select_output_folder(self):
-        folder = filedialog.askdirectory(title="Выберите выходную папку")
+        """Выбрать выходную папку"""
+        folder = filedialog.askdirectory(title="Выберите папку для сохранения")
         if folder:
             self.output_var.set(folder)
     
-    def update_progress(self):
-        if self.total > 0:
-            progress_value = (self.completed / self.total) * 100
-            self.progress['value'] = progress_value
-            self.status_label.config(text=f"Обработка {self.completed}/{self.total} файлов...")
-    
-    def is_video_file(self, file_path):
-        video_extensions = {'.mp4', '.avi', '.mkv', '.mov'}
-        return Path(file_path).suffix.lower() in video_extensions
-    
-    def build_audio_filters(self, use_gate, gate_threshold, stereo_width, prevent_clipping, target_level, mode, eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise):
+    def build_audio_filters(self, use_gate, gate_threshold, stereo_width, prevent_clipping, 
+                           target_level, mode, eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise):
         """Строит цепочку аудио фильтров"""
         audio_filters = []
         
-        # АДАПТИВНОЕ шумоподавление
+        # HF Denoiser
         if hf_denoise:
-            audio_filters.append('afftdn=nr=4:nf=-65:tn=1:om=o')
+            audio_filters.append('afftdn=nr=3:nf=-70:tn=1:om=o')
         
         # EQ - 3-полосный эквалайзер
         if eq_bass != 0:
-            audio_filters.append(f'equalizer=f=60:width_type=o:width=2:g={eq_bass}')
+            audio_filters.append(f'equalizer=f=40:width_type=o:width=2:g={eq_bass}')
         
         if eq_mid != 0:
             audio_filters.append(f'equalizer=f=1000:width_type=o:width=2:g={eq_mid}')
@@ -267,8 +541,8 @@ class AudioNormalizer:
         if use_exciter:
             audio_filters.append('aexciter=level_in=1:level_out=1:amount=3:drive=8.5:blend=0:freq=7500:ceil=16000:listen=0')
         
-        # Шумоподавление (gate)
-        if use_gate and gate_threshold < -55:
+        # Noise Gate
+        if use_gate:
             if mode == "compressed":
                 audio_filters.append(f'agate=threshold={gate_threshold}dB:ratio=5:attack=20:release=200')
             else:
@@ -280,23 +554,18 @@ class AudioNormalizer:
         
         # Режимы обработки
         if mode == "compressed":
-            # Опера/классика - БЕЗ ДАВЛЕНИЯ, только защита от перегрузов
-            
-            # 1. ОДНА очень мягкая компрессия (как раньше)
+            # Классика/Опера - сохраняет динамику
             audio_filters.append('acompressor=threshold=-25dB:ratio=1.5:attack=300:release=1500:makeup=0dB')
             
-            # 2. Loudnorm с запасом по пикам (предотвращает перегрузы)
-            tp_level = '-4.0' if prevent_clipping else '-3.5'  # Больший запас чем раньше
-            lra_value = 14  # Большой динамический диапазон
+            tp_level = '-4.0' if prevent_clipping else '-3.5'
+            lra_value = 14
             audio_filters.append(f'loudnorm=I={target_level}:TP={tp_level}:LRA={lra_value}')
             
-            # 3. ДВА мягких лимитера - только страховка, не давят
-            # Первый лимитер - очень мягкий
             audio_filters.append('alimiter=limit=0.93:attack=3:release=50')
-            # Второй лимитер - финальная защита
             audio_filters.append('alimiter=limit=0.90:attack=2:release=30')
                 
         elif mode == "vocal":
+            # Вокальный режим
             audio_filters.append('deesser')
             
             if prevent_clipping:
@@ -311,8 +580,21 @@ class AudioNormalizer:
                 audio_filters.append('alimiter=limit=0.88:attack=2:release=30')
             else:
                 audio_filters.append('alimiter=limit=0.92:attack=3:release=40')
+        
+        elif mode == "music":
+            # Музыкальный режим
+            audio_filters.append('acompressor=threshold=-22dB:ratio=2:attack=150:release=800:makeup=0dB')
+            
+            tp_level = '-2.5' if prevent_clipping else '-2.0'
+            audio_filters.append(f'loudnorm=I={target_level}:TP={tp_level}:LRA=9')
+            
+            if prevent_clipping:
+                audio_filters.append('alimiter=limit=0.90:attack=3:release=40')
+            else:
+                audio_filters.append('alimiter=limit=0.94:attack=5:release=60')
+        
         else:
-            # Обычный режим
+            # Обычный режим (normal)
             tp_level = '-3.0' if prevent_clipping else '-2.0'
             audio_filters.append(f'loudnorm=I={target_level}:TP={tp_level}:LRA=11')
             
@@ -323,12 +605,16 @@ class AudioNormalizer:
         
         return audio_filters
     
-    def normalize_audio(self, input_file, output_file, target_level, is_video, keep_video, use_gate, gate_threshold, stereo_width, prevent_clipping, mode, eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise):
-        """Универсальная функция нормализации"""
+    def normalize_audio(self, input_file, output_file, target_level, is_video, keep_video,
+                       use_gate, gate_threshold, stereo_width, prevent_clipping, mode,
+                       eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise):
+        """Нормализация одного файла"""
         
         base_cmd = ['ffmpeg', '-y', '-threads', '0', '-i', input_file]
         
-        audio_filters = self.build_audio_filters(use_gate, gate_threshold, stereo_width, prevent_clipping, target_level, mode, eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise)
+        audio_filters = self.build_audio_filters(use_gate, gate_threshold, stereo_width,
+                                                 prevent_clipping, target_level, mode,
+                                                 eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise)
         
         filter_complex = ','.join(audio_filters)
         
@@ -341,125 +627,169 @@ class AudioNormalizer:
                               creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         
         if result.returncode != 0:
-            error_msg = f"ffmpeg код ошибки: {result.returncode}\n{result.stderr[-500:]}"
+            error_msg = f"ffmpeg ошибка: {result.returncode}\n{result.stderr[-500:]}"
             raise Exception(error_msg)
         
         if not os.path.exists(output_file):
             raise Exception(f"Файл не создан: {output_file}")
         
         if os.path.getsize(output_file) < 1000:
-            raise Exception(f"Файл слишком маленький: {os.path.getsize(output_file)} bytes")
+            raise Exception(f"Файл слишком маленький (возможно пустой)")
     
-    def process_files(self):
+    def process_file(self, file_path, output_dir, target_level, suffix, keep_video,
+                    use_gate, gate_threshold, stereo_width, prevent_clipping, mode,
+                    eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise):
+        """Обработка одного файла"""
+        try:
+            file_name = Path(file_path).stem
+            file_ext = Path(file_path).suffix.lower()
+            
+            is_video = file_ext in ['.mp4', '.avi', '.mkv', '.mov']
+            
+            if is_video and keep_video:
+                output_file = os.path.join(output_dir, f"{file_name}{suffix}.mp4")
+            else:
+                output_file = os.path.join(output_dir, f"{file_name}{suffix}.mp3")
+            
+            self.normalize_audio(file_path, output_file, target_level, is_video, keep_video,
+                               use_gate, gate_threshold, stereo_width, prevent_clipping, mode,
+                               eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise)
+            
+            return True, file_name
+        
+        except Exception as e:
+            return False, f"{file_name}: {str(e)}"
+    
+    def start_normalization(self):
+        """Запуск нормализации"""
         if not self.files:
-            messagebox.showwarning("Предупреждение", "Добавьте файлы")
+            messagebox.showwarning("Внимание", "Добавьте файлы для обработки!")
             return
         
-        output_folder = self.output_var.get()
-        if not output_folder:
-            messagebox.showwarning("Предупреждение", "Выберите выходную папку")
+        output_dir = self.output_var.get()
+        if output_dir == "Не выбрана":
+            messagebox.showwarning("Внимание", "Выберите выходную папку!")
+            return
+        
+        if self.processing:
+            messagebox.showinfo("Информация", "Обработка уже выполняется!")
             return
         
         try:
-            target_level = float(self.target_level_var.get())
+            target_level = float(self.target_var.get())
+            if target_level > 0:
+                messagebox.showwarning("Внимание", "Целевой уровень должен быть отрицательным (например: -16)")
+                return
+        except ValueError:
+            messagebox.showerror("Ошибка", "Неверное значение целевого уровня!")
+            return
+        
+        try:
             gate_threshold = float(self.gate_threshold_var.get())
-            stereo_width = float(self.stereo_width_var.get())
-            num_threads = int(self.threads_var.get())
+        except ValueError:
+            gate_threshold = -40.0
+        
+        try:
+            stereo_width = float(self.stereo_var.get())
+        except ValueError:
+            stereo_width = 1.0
+        
+        try:
             eq_bass = float(self.eq_bass_var.get())
             eq_mid = float(self.eq_mid_var.get())
             eq_treble = float(self.eq_treble_var.get())
         except ValueError:
-            messagebox.showerror("Ошибка", "Проверьте числовые значения")
-            return
+            eq_bass = eq_mid = eq_treble = 0.0
         
-        if not os.path.exists(output_folder):
-            os.makedirs(output_folder)
+        try:
+            max_workers = int(self.threads_var.get())
+            max_workers = max(1, min(max_workers, multiprocessing.cpu_count()))
+        except ValueError:
+            max_workers = max(1, multiprocessing.cpu_count() - 1)
         
         self.processing = True
         self.completed = 0
         self.total = len(self.files)
-        self.process_btn.config(state='disabled')
+        self.start_button.config(state=tk.DISABLED, bg=self.colors['text_dim'])
         
-        mode = self.mode_var.get()
-        mp4_output = self.mp4_output_var.get()
-        use_gate = self.use_gate_var.get()
-        prevent_clipping = self.prevent_clipping_var.get()
-        use_exciter = self.exciter_var.get()
-        hf_denoise = self.hf_denoise_var.get()
-        
-        thread = threading.Thread(target=self.process_thread, 
-                                 args=(output_folder, target_level, num_threads, mode, mp4_output, use_gate, gate_threshold, stereo_width, prevent_clipping, eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise))
-        thread.start()
-    
-    def process_single_file(self, file_path, output_folder, suffix, target_level, mode, mp4_output, use_gate, gate_threshold, stereo_width, prevent_clipping, eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise):
-        try:
-            filename = Path(file_path).stem
-            input_extension = Path(file_path).suffix.lower()
+        def process_all():
+            """Обработка всех файлов в потоках"""
+            suffix = self.suffix_var.get()
+            keep_video = self.keep_video_var.get()
+            use_gate = self.use_gate_var.get()
+            prevent_clipping = self.prevent_clipping_var.get()
+            mode = self.mode_var.get()
+            use_exciter = self.use_exciter_var.get()
+            hf_denoise = self.hf_denoise_var.get()
             
-            is_video = self.is_video_file(file_path)
+            errors = []
             
-            if is_video and mp4_output == "mp4":
-                output_extension = input_extension
-                keep_video = True
-            else:
-                output_extension = '.mp3'
-                keep_video = False
-            
-            output_file = os.path.join(output_folder, f"{filename}{suffix}{output_extension}")
-            
-            self.normalize_audio(file_path, output_file, target_level, is_video, keep_video, use_gate, gate_threshold, stereo_width, prevent_clipping, mode, eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise)
-            
-            return True, file_path
-        except Exception as e:
-            return False, (file_path, str(e))
-    
-    def process_thread(self, output_folder, target_level, num_threads, mode, mp4_output, use_gate, gate_threshold, stereo_width, prevent_clipping, eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise):
-        suffix = self.suffix_var.get()
-        
-        self.root.after(0, self.update_progress)
-        
-        success_count = 0
-        error_count = 0
-        
-        with ThreadPoolExecutor(max_workers=num_threads) as executor:
-            futures = []
-            for file_path in self.files:
-                future = executor.submit(self.process_single_file, file_path, output_folder, suffix, target_level, mode, mp4_output, use_gate, gate_threshold, stereo_width, prevent_clipping, eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise)
-                futures.append((future, file_path))
-            
-            for future, file_path in futures:
-                try:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
+                
+                for file_path in self.files:
+                    future = executor.submit(
+                        self.process_file, file_path, output_dir, target_level, suffix,
+                        keep_video, use_gate, gate_threshold, stereo_width, prevent_clipping,
+                        mode, eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise
+                    )
+                    futures.append(future)
+                
+                for future in futures:
                     success, result = future.result()
                     self.completed += 1
                     
+                    progress = (self.completed / self.total) * 100
+                    self.root.after(0, lambda p=progress: self.progress_var.set(p))
+                    self.root.after(0, lambda: self.status_var.set(f"Обработка {self.completed}/{self.total}"))
+                    
                     if not success:
-                        error_count += 1
-                        error_file, error_msg = result
-                        self.root.after(0, lambda f=error_file, e=error_msg: 
-                            messagebox.showerror("Ошибка", f"{os.path.basename(f)}:\n\n{e}"))
-                    else:
-                        success_count += 1
-                    
-                    self.root.after(0, self.update_progress)
-                    
-                except Exception as e:
-                    error_count += 1
-                    self.root.after(0, lambda e=e: messagebox.showerror("Ошибка", str(e)))
-        
-        def finish():
-            self.status_label.config(text=f"Готово! Успешно: {success_count}, Ошибок: {error_count}")
-            self.process_btn.config(state='normal')
-            self.processing = False
+                        errors.append(result)
             
-            if success_count > 0:
-                messagebox.showinfo("Готово", 
-                    f"Успешно: {success_count}\nОшибок: {error_count}\n\nПапка:\n{output_folder}")
-            else:
-                messagebox.showerror("Ошибка", "Ни один файл не обработан!")
+            def finish():
+                """Завершение обработки"""
+                self.processing = False
+                self.start_button.config(state=tk.NORMAL, bg=self.colors['success'])
+                
+                if errors:
+                    error_msg = "Ошибки при обработке:\n\n" + "\n".join(errors[:10])
+                    if len(errors) > 10:
+                        error_msg += f"\n\n... и ещё {len(errors) - 10} ошибок"
+                    messagebox.showwarning("Завершено с ошибками", error_msg)
+                else:
+                    messagebox.showinfo("Готово!", f"Успешно обработано файлов: {self.completed}")
+                
+                self.status_var.set("Готов к работе")
+                self.progress_var.set(0)
+            
+            self.root.after(0, finish)
         
-        self.root.after(0, finish)
+        thread = threading.Thread(target=process_all, daemon=True)
+        thread.start()
+
+
+def check_ffmpeg():
+    """Проверка наличия ffmpeg"""
+    try:
+        result = subprocess.run(['ffmpeg', '-version'], capture_output=True,
+                              creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
 
 if __name__ == "__main__":
+    if not check_ffmpeg():
+        import tkinter.messagebox as mb
+        root = tk.Tk()
+        root.withdraw()
+        mb.showerror("FFmpeg не найден",
+                    "FFmpeg не установлен или не добавлен в PATH!\n\n"
+                    "Скачайте: https://www.gyan.dev/ffmpeg/builds/\n"
+                    "Установите и добавьте в PATH системы.\n\n"
+                    "Подробные инструкции в README.md")
+        exit(1)
+    
     root = tk.Tk()
     app = AudioNormalizer(root)
     root.mainloop()

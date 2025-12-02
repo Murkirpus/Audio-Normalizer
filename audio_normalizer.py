@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Audio Normalizer - Профессиональная нормализация громкости аудио и видео
-Версия: 2.0 - Красивый интерфейс
+Версия: 2.4 - Случайное 10-секундное превью из любого места трека
 """
 
 import tkinter as tk
@@ -13,6 +13,8 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
+import tempfile
+import random
 
 class AudioNormalizer:
     def __init__(self, root):
@@ -40,6 +42,8 @@ class AudioNormalizer:
         self.processing = False
         self.completed = 0
         self.total = 0
+        self.preview_process = None
+        self.preview_temp_file = None
         
         self.setup_fonts()
         self.setup_styles()
@@ -149,6 +153,10 @@ class AudioNormalizer:
                           self.add_files, self.colors['accent'], 18).pack(side=tk.LEFT, padx=5)
         self.create_button(btn_frame, "📂 Добавить папку", 
                           self.add_folder, self.colors['accent'], 18).pack(side=tk.LEFT, padx=5)
+        self.create_button(btn_frame, "🎧 Предпросмотр", 
+                          self.preview_audio, self.colors['warning'], 18).pack(side=tk.LEFT, padx=5)
+        self.create_button(btn_frame, "⏹️ Остановить превью", 
+                          self.stop_preview, self.colors['error'], 18).pack(side=tk.LEFT, padx=5)
         self.create_button(btn_frame, "🗑️ Очистить", 
                           self.clear_files, self.colors['error'], 15).pack(side=tk.LEFT, padx=5)
         
@@ -178,7 +186,6 @@ class AudioNormalizer:
         scrollbar.config(command=self.file_listbox.yview)
         
         # === НАСТРОЙКИ (2 КОЛОНКИ) С ПРОКРУТКОЙ ===
-        # Создаем Canvas с прокруткой для настроек
         settings_outer = tk.Frame(self.root, bg=self.colors['bg'])
         settings_outer.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
@@ -476,6 +483,8 @@ class AudioNormalizer:
                                                self.start_normalization,
                                                self.colors['success'], 30)
         self.start_button.pack(pady=3)
+
+    # === МЕТОДЫ РАБОТЫ С ФАЙЛАМИ ===
     
     def add_files(self):
         """Добавить файлы"""
@@ -517,87 +526,318 @@ class AudioNormalizer:
         folder = filedialog.askdirectory(title="Выберите папку для сохранения")
         if folder:
             self.output_var.set(folder)
+
+    # === ПРЕДПРОСЛУШИВАНИЕ ===
+    
+    def stop_preview(self):
+        """Остановить текущее превью и очистить ресурсы"""
+        if self.preview_process and self.preview_process.poll() is None:
+            try:
+                self.preview_process.terminate()
+                self.preview_process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    self.preview_process.kill()
+                except:
+                    pass
+            except:
+                pass
+        self.preview_process = None
+
+        if self.preview_temp_file and os.path.exists(self.preview_temp_file):
+            try:
+                os.unlink(self.preview_temp_file)
+            except:
+                pass
+        self.preview_temp_file = None
+
+        self.status_var.set("Готов к работе")
+
+    def _preview_from_start(self, input_file):
+        """Резервный превью с начала файла (если ffprobe недоступен или ошибка)"""
+        file_ext = Path(input_file).suffix.lower()
+        is_video = file_ext in ['.mp4', '.avi', '.mkv', '.mov']
+        suffix = ".mp4" if (is_video and self.keep_video_var.get()) else ".wav"
+
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp_file = tmp.name
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось создать временный файл:\n{str(e)}")
+            return
+        self.preview_temp_file = tmp_file
+
+        try:
+            target_level = float(self.target_var.get())
+            gate_threshold = float(self.gate_threshold_var.get())
+            stereo_width = float(self.stereo_var.get())
+            eq_bass = float(self.eq_bass_var.get())
+            eq_mid = float(self.eq_mid_var.get())
+            eq_treble = float(self.eq_treble_var.get())
+        except ValueError:
+            messagebox.showerror("Ошибка ввода", "Проверьте числовые значения.")
+            self.stop_preview()
+            return
+
+        audio_filters = self.build_audio_filters(
+            self.use_gate_var.get(),
+            gate_threshold,
+            stereo_width,
+            self.prevent_clipping_var.get(),
+            target_level,
+            self.mode_var.get(),
+            eq_bass, eq_mid, eq_treble,
+            self.use_exciter_var.get(),
+            self.hf_denoise_var.get()
+        )
+        filter_complex = ','.join(audio_filters)
+
+        base_cmd = ['ffmpeg', '-y', '-threads', '0', '-i', input_file, '-t', '10']
+        if is_video and self.keep_video_var.get():
+            cmd = base_cmd + ['-af', filter_complex, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', tmp_file]
+        else:
+            cmd = base_cmd + ['-af', filter_complex, '-f', 'wav', '-vn', tmp_file]
+
+        self.status_var.set("Генерация превью с начала (10 сек)...")
+        self.root.update_idletasks()
+
+        try:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                timeout=20
+            )
+        except subprocess.TimeoutExpired:
+            messagebox.showerror("Ошибка", "Таймаут генерации превью.")
+            self.stop_preview()
+            return
+
+        if result.returncode != 0:
+            stderr_msg = result.stderr.decode('utf-8', errors='ignore')[-500:]
+            messagebox.showerror("Ошибка FFmpeg", f"Не удалось создать превью:\n{stderr_msg}")
+            self.stop_preview()
+            return
+
+        if not os.path.exists(tmp_file) or os.path.getsize(tmp_file) < 1000:
+            messagebox.showerror("Ошибка", "Превью-файл пуст.")
+            self.stop_preview()
+            return
+
+        self.status_var.set("Воспроизведение (с начала, 10 сек)...")
+        ffplay_cmd = ['ffplay', '-autoexit', '-nodisp', '-loglevel', 'quiet', tmp_file]
+        try:
+            self.preview_process = subprocess.Popen(
+                ffplay_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+        except FileNotFoundError:
+            messagebox.showerror("Ошибка", "ffplay не найден! Установите FFmpeg Essentials Build.")
+            self.stop_preview()
+            return
+
+        def monitor():
+            if self.preview_process:
+                self.preview_process.wait()
+                self.root.after(0, self.stop_preview)
+        threading.Thread(target=monitor, daemon=True).start()
+
+    def preview_audio(self):
+        """Предварительный просмотр: случайные 10 секунд из файла"""
+        if not self.files:
+            messagebox.showwarning("Внимание", "Добавьте хотя бы один файл для предварительного прослушивания!")
+            return
+
+        self.stop_preview()
+        input_file = self.files[0]
+
+        # --- 1. Получаем длительность файла через ffprobe ---
+        try:
+            result = subprocess.run(
+                ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                 '-of', 'default=noprint_wrappers=1:nokey=1', input_file],
+                capture_output=True, text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                timeout=10
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                raise ValueError("Не удалось определить длительность")
+            duration = float(result.stdout.strip())
+        except (ValueError, subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+            # Если ffprobe недоступен — fallback на начало
+            self._preview_from_start(input_file)
+            return
+
+        if duration <= 10:
+            self._preview_from_start(input_file)
+            return
+
+        # --- 2. Выбираем случайную позицию ---
+        max_start = duration - 10
+        start_time = random.uniform(0, max_start)
+
+        # --- 3. Генерация превью с этой позиции ---
+        file_ext = Path(input_file).suffix.lower()
+        is_video = file_ext in ['.mp4', '.avi', '.mkv', '.mov']
+        suffix = ".mp4" if (is_video and self.keep_video_var.get()) else ".wav"
+
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp_file = tmp.name
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось создать временный файл:\n{str(e)}")
+            return
+
+        self.preview_temp_file = tmp_file
+
+        try:
+            target_level = float(self.target_var.get())
+            gate_threshold = float(self.gate_threshold_var.get())
+            stereo_width = float(self.stereo_var.get())
+            eq_bass = float(self.eq_bass_var.get())
+            eq_mid = float(self.eq_mid_var.get())
+            eq_treble = float(self.eq_treble_var.get())
+        except ValueError:
+            messagebox.showerror("Ошибка ввода", "Проверьте числовые значения.")
+            self.stop_preview()
+            return
+
+        audio_filters = self.build_audio_filters(
+            self.use_gate_var.get(),
+            gate_threshold,
+            stereo_width,
+            self.prevent_clipping_var.get(),
+            target_level,
+            self.mode_var.get(),
+            eq_bass, eq_mid, eq_treble,
+            self.use_exciter_var.get(),
+            self.hf_denoise_var.get()
+        )
+        filter_complex = ','.join(audio_filters)
+
+        # ВАЖНО: -ss ДО -i для быстрого seeking'а
+        base_cmd = [
+            'ffmpeg', '-y', '-threads', '0',
+            '-ss', f"{start_time:.3f}",
+            '-i', input_file,
+            '-t', '10'
+        ]
+        if is_video and self.keep_video_var.get():
+            cmd = base_cmd + ['-af', filter_complex, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', tmp_file]
+        else:
+            cmd = base_cmd + ['-af', filter_complex, '-f', 'wav', '-vn', tmp_file]
+
+        self.status_var.set(f"Генерация превью (10 сек с {start_time:.1f} сек)...")
+        self.root.update_idletasks()
+
+        try:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                timeout=20
+            )
+        except subprocess.TimeoutExpired:
+            messagebox.showerror("Ошибка", "Таймаут генерации превью.")
+            self.stop_preview()
+            return
+
+        if result.returncode != 0:
+            stderr_msg = result.stderr.decode('utf-8', errors='ignore')[-500:] if result.stderr else "Неизвестная ошибка"
+            messagebox.showerror("Ошибка FFmpeg", f"Не удалось создать превью:\n{stderr_msg}")
+            self.stop_preview()
+            return
+
+        if not os.path.exists(tmp_file) or os.path.getsize(tmp_file) < 1000:
+            messagebox.showerror("Ошибка", "Превью-файл пуст.")
+            self.stop_preview()
+            return
+
+        self.status_var.set("Воспроизведение случайного фрагмента (10 сек)...")
+        ffplay_cmd = ['ffplay', '-autoexit', '-nodisp', '-loglevel', 'quiet', tmp_file]
+        try:
+            self.preview_process = subprocess.Popen(
+                ffplay_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+        except FileNotFoundError:
+            messagebox.showerror("Ошибка", "ffplay не найден! Установите FFmpeg Essentials Build.")
+            self.stop_preview()
+            return
+
+        def monitor():
+            if self.preview_process:
+                self.preview_process.wait()
+                self.root.after(0, self.stop_preview)
+        threading.Thread(target=monitor, daemon=True).start()
+
+    # === ОСНОВНЫЕ ФУНКЦИИ НОРМАЛИЗАЦИИ ===
     
     def build_audio_filters(self, use_gate, gate_threshold, stereo_width, prevent_clipping, 
                            target_level, mode, eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise):
         """Строит цепочку аудио фильтров"""
         audio_filters = []
         
-        # HF Denoiser
         if hf_denoise:
             audio_filters.append('afftdn=nr=3:nf=-70:tn=1:om=o')
         
-        # EQ - 3-полосный эквалайзер
         if eq_bass != 0:
             audio_filters.append(f'equalizer=f=40:width_type=o:width=2:g={eq_bass}')
-        
         if eq_mid != 0:
             audio_filters.append(f'equalizer=f=1000:width_type=o:width=2:g={eq_mid}')
-        
         if eq_treble != 0:
             audio_filters.append(f'equalizer=f=10000:width_type=o:width=2:g={eq_treble}')
         
-        # Exciter
         if use_exciter:
             audio_filters.append('aexciter=level_in=1:level_out=1:amount=3:drive=8.5:blend=0:freq=7500:ceil=16000:listen=0')
         
-        # Noise Gate
         if use_gate:
             if mode == "compressed":
                 audio_filters.append(f'agate=threshold={gate_threshold}dB:ratio=5:attack=20:release=200')
             else:
                 audio_filters.append(f'agate=threshold={gate_threshold}dB:ratio=10:attack=10:release=100')
         
-        # Стерео
         if stereo_width != 1.0:
             audio_filters.append(f'stereotools=mlev={stereo_width}')
         
-        # Режимы обработки
         if mode == "compressed":
-            # Классика/Опера - сохраняет динамику
             audio_filters.append('acompressor=threshold=-25dB:ratio=1.5:attack=300:release=1500:makeup=0dB')
-            
             tp_level = '-4.0' if prevent_clipping else '-3.5'
             lra_value = 14
             audio_filters.append(f'loudnorm=I={target_level}:TP={tp_level}:LRA={lra_value}')
-            
             audio_filters.append('alimiter=limit=0.93:attack=3:release=50')
             audio_filters.append('alimiter=limit=0.90:attack=2:release=30')
                 
         elif mode == "vocal":
-            # Вокальный режим
             audio_filters.append('deesser')
-            
             if prevent_clipping:
                 audio_filters.append('acompressor=threshold=-15dB:ratio=3:attack=80:release=300')
-            
             audio_filters.append('acompressor=threshold=-18dB:ratio=2:attack=100:release=400')
-            
             tp_level = '-3.0' if prevent_clipping else '-2.5'
             audio_filters.append(f'loudnorm=I={target_level}:TP={tp_level}:LRA=8')
-            
             if prevent_clipping:
                 audio_filters.append('alimiter=limit=0.88:attack=2:release=30')
             else:
                 audio_filters.append('alimiter=limit=0.92:attack=3:release=40')
         
         elif mode == "music":
-            # Музыкальный режим
             audio_filters.append('acompressor=threshold=-22dB:ratio=2:attack=150:release=800:makeup=0dB')
-            
             tp_level = '-2.5' if prevent_clipping else '-2.0'
             audio_filters.append(f'loudnorm=I={target_level}:TP={tp_level}:LRA=9')
-            
             if prevent_clipping:
                 audio_filters.append('alimiter=limit=0.90:attack=3:release=40')
             else:
                 audio_filters.append('alimiter=limit=0.94:attack=5:release=60')
         
         else:
-            # Обычный режим (normal)
             tp_level = '-3.0' if prevent_clipping else '-2.0'
             audio_filters.append(f'loudnorm=I={target_level}:TP={tp_level}:LRA=11')
-            
             if prevent_clipping:
                 audio_filters.append('alimiter=limit=0.88:attack=2:release=30')
             else:
@@ -609,13 +849,10 @@ class AudioNormalizer:
                        use_gate, gate_threshold, stereo_width, prevent_clipping, mode,
                        eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise):
         """Нормализация одного файла"""
-        
         base_cmd = ['ffmpeg', '-y', '-threads', '0', '-i', input_file]
-        
         audio_filters = self.build_audio_filters(use_gate, gate_threshold, stereo_width,
                                                  prevent_clipping, target_level, mode,
                                                  eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise)
-        
         filter_complex = ','.join(audio_filters)
         
         if is_video and keep_video:
@@ -643,7 +880,6 @@ class AudioNormalizer:
         try:
             file_name = Path(file_path).stem
             file_ext = Path(file_path).suffix.lower()
-            
             is_video = file_ext in ['.mp4', '.avi', '.mkv', '.mov']
             
             if is_video and keep_video:
@@ -654,12 +890,11 @@ class AudioNormalizer:
             self.normalize_audio(file_path, output_file, target_level, is_video, keep_video,
                                use_gate, gate_threshold, stereo_width, prevent_clipping, mode,
                                eq_bass, eq_mid, eq_treble, use_exciter, hf_denoise)
-            
             return True, file_name
         
         except Exception as e:
             return False, f"{file_name}: {str(e)}"
-    
+
     def start_normalization(self):
         """Запуск нормализации"""
         if not self.files:
@@ -713,7 +948,6 @@ class AudioNormalizer:
         self.start_button.config(state=tk.DISABLED, bg=self.colors['text_dim'])
         
         def process_all():
-            """Обработка всех файлов в потоках"""
             suffix = self.suffix_var.get()
             keep_video = self.keep_video_var.get()
             use_gate = self.use_gate_var.get()
@@ -726,7 +960,6 @@ class AudioNormalizer:
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = []
-                
                 for file_path in self.files:
                     future = executor.submit(
                         self.process_file, file_path, output_dir, target_level, suffix,
@@ -738,19 +971,15 @@ class AudioNormalizer:
                 for future in futures:
                     success, result = future.result()
                     self.completed += 1
-                    
                     progress = (self.completed / self.total) * 100
                     self.root.after(0, lambda p=progress: self.progress_var.set(p))
                     self.root.after(0, lambda: self.status_var.set(f"Обработка {self.completed}/{self.total}"))
-                    
                     if not success:
                         errors.append(result)
             
             def finish():
-                """Завершение обработки"""
                 self.processing = False
                 self.start_button.config(state=tk.NORMAL, bg=self.colors['success'])
-                
                 if errors:
                     error_msg = "Ошибки при обработке:\n\n" + "\n".join(errors[:10])
                     if len(errors) > 10:
@@ -758,7 +987,6 @@ class AudioNormalizer:
                     messagebox.showwarning("Завершено с ошибками", error_msg)
                 else:
                     messagebox.showinfo("Готово!", f"Успешно обработано файлов: {self.completed}")
-                
                 self.status_var.set("Готов к работе")
                 self.progress_var.set(0)
             
@@ -769,13 +997,15 @@ class AudioNormalizer:
 
 
 def check_ffmpeg():
-    """Проверка наличия ffmpeg"""
-    try:
-        result = subprocess.run(['ffmpeg', '-version'], capture_output=True,
-                              creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-        return result.returncode == 0
-    except FileNotFoundError:
-        return False
+    """Проверка наличия ffmpeg, ffprobe и ffplay"""
+    tools = ['ffmpeg', 'ffprobe', 'ffplay']
+    for tool in tools:
+        try:
+            subprocess.run([tool, '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+        except FileNotFoundError:
+            return False
+    return True
 
 
 if __name__ == "__main__":
@@ -784,10 +1014,13 @@ if __name__ == "__main__":
         root = tk.Tk()
         root.withdraw()
         mb.showerror("FFmpeg не найден",
-                    "FFmpeg не установлен или не добавлен в PATH!\n\n"
-                    "Скачайте: https://www.gyan.dev/ffmpeg/builds/\n"
-                    "Установите и добавьте в PATH системы.\n\n"
-                    "Подробные инструкции в README.md")
+                    "Требуются ffmpeg, ffprobe и ffplay из **Essentials Build**!\n\n"
+                    "Скачайте и установите:\n"
+                    " • https://www.gyan.dev/ffmpeg/builds/ → ffmpeg-release-essentials.7z\n\n"
+                    "Или через команду:\n"
+                    " • winget install \"FFmpeg (Essentials Build)\"\n"
+                    " • choco install ffmpeg\n\n"
+                    "После установки перезапустите программу.")
         exit(1)
     
     root = tk.Tk()
